@@ -2,6 +2,8 @@
 
 A chess game for the Nintendo 3DS that uses both screens. You can play pass & play, against the CPU, or against a friend over local wireless.
 
+<p><img src="docs/menu.png" width="300"> <img src="docs/screenshot.png" width="300"></p>
+
 | Screen | What's on it |
 | --- | --- |
 | **Top** | Player cards (whose turn it is, captured pieces, material lead), game status, and a scrolling move list in algebraic notation |
