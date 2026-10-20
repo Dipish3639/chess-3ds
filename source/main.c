@@ -205,19 +205,29 @@ static Position ai_pos;
 static Move ai_result;
 static int ai_level_arg;
 static int ai_start_frame;
+static bool ai_assist; // current search is a move suggestion for the local player
+
+// Hidden assist: a button sequence toggles it, then SELECT plays the
+// strongest move the engine can find for you.
+static bool assist_on;
+static u8 assist_bits;
+static int assist_presses;
+#define ASSIST_THINK_MS 4000
 
 static void ai_entry(void *arg)
 {
 	(void)arg;
 	Move m;
-	ai_ok = ai_pick_move(&ai_pos, ai_level_arg, &ai_abort, &m);
+	if (ai_assist)
+		ai_ok = ai_best_move(&ai_pos, ASSIST_THINK_MS, &ai_abort, &m);
+	else
+		ai_ok = ai_pick_move(&ai_pos, ai_level_arg, &ai_abort, &m);
 	ai_result = m;
 	ai_done = true;
 }
 
-static void ai_start(void)
+static void ai_launch(void)
 {
-	if (ai_running) return;
 	ai_pos = *cur();
 	ai_level_arg = cpu_level;
 	ai_done = false;
@@ -232,6 +242,20 @@ static void ai_start(void)
 		ai_entry(NULL);
 		ai_running = true;
 	}
+}
+
+static void ai_start(void)
+{
+	if (ai_running) return;
+	ai_assist = false;
+	ai_launch();
+}
+
+static void assist_start(void)
+{
+	if (ai_running) return;
+	ai_assist = true;
+	ai_launch();
 }
 
 static void ai_stop(void)
@@ -252,7 +276,7 @@ static void ai_stop(void)
 
 static bool local_turn(void)
 {
-	if (game_over) return false;
+	if (game_over || ai_running) return false;
 	switch (mode) {
 	case MODE_CPU: return cur()->side == human_color && !ai_running;
 	case MODE_NET: return cur()->side == my_color;
@@ -675,7 +699,7 @@ static void draw_status_box(float x, float y, float w, float h)
 		const char *side = p->side == WHITE ? "White" : "Black";
 		if (mode == MODE_LOCAL) {
 			snprintf(line1, sizeof(line1), "%s to move%s", side, check ? " - Check!" : "");
-		} else if (local_turn() || (mode == MODE_CPU && p->side == human_color)) {
+		} else if (local_turn() || (mode == MODE_CPU && p->side == human_color) || (ai_running && ai_assist)) {
 			snprintf(line1, sizeof(line1), check ? "Your move - Check!" : "Your move");
 		} else if (mode == MODE_CPU) {
 			int dots = (frame_count / 20) % 4;
@@ -855,6 +879,8 @@ static void draw_panel(void)
 		text(PANEL_X + 40, 16, 0.5f, c_accent, C2D_AlignCenter, "Game");
 		text(PANEL_X + 40, 34, 0.5f, c_accent, C2D_AlignCenter, "over");
 	}
+
+	if (assist_on) C2D_DrawCircleSolid(BOT_W - 4, 4, 0.5f, 1.5f, c_text_dim);
 
 	button(panel_btn(0), "Menu", false, true, 0.5f);
 	button(panel_btn(1), "Undo", false, can_undo(), 0.5f);
@@ -1273,6 +1299,21 @@ static void input_game(u32 down, u32 held, u32 up, touchPosition touch)
 	if (down & KEY_X) flip_pressed();
 	if ((down & KEY_Y) && can_undo()) undo();
 
+	if (down & (KEY_L | KEY_R)) {
+		assist_bits = (u8)((assist_bits << 1) | ((down & KEY_R) ? 1 : 0));
+		assist_presses++;
+		if (assist_presses >= 8 && (u8)(assist_bits * 167 + 59) == 0x96) {
+			assist_on = !assist_on;
+			assist_bits = 0;
+			assist_presses = 0;
+		}
+	}
+	if ((down & KEY_SELECT) && assist_on && local_turn()) {
+		sel = -1;
+		dragging = false;
+		assist_start();
+	}
+
 	if (down & (KEY_UP | KEY_DOWN | KEY_LEFT | KEY_RIGHT)) {
 		if (!cursor_visible) {
 			cursor_visible = true;
@@ -1437,7 +1478,7 @@ static void update(void)
 			ai_thread = NULL;
 		}
 		ai_running = false;
-		if (ai_ok && screen == SCR_GAME && !game_over) apply_move(ai_result, true, false);
+		if (ai_ok && screen == SCR_GAME && !game_over) apply_move(ai_result, true, ai_assist);
 	}
 }
 

@@ -2,6 +2,14 @@
 
 #include <stdlib.h>
 
+#ifdef __3DS__
+#include <3ds.h>
+static uint64_t now_ms(void) { return osGetTime(); }
+#else
+#include <time.h>
+static uint64_t now_ms(void) { return (uint64_t)clock() * 1000 / CLOCKS_PER_SEC; }
+#endif
+
 #define INF        1000000
 #define MATE_SCORE 30000
 #define MAX_QDEPTH 6
@@ -84,6 +92,15 @@ static const int *pst[7] = {0, pst_pawn, pst_knight, pst_bishop, pst_rook, pst_q
 
 static volatile bool *g_abort;
 static unsigned g_nodes;
+static uint64_t g_deadline; // 0 = no time limit
+static bool g_out_of_time;
+
+static bool stopped(void)
+{
+	if (*g_abort || g_out_of_time) return true;
+	if (g_deadline && (g_nodes & 1023) == 0 && now_ms() >= g_deadline) g_out_of_time = true;
+	return g_out_of_time;
+}
 
 // Static evaluation from the side to move's point of view.
 static int evaluate(const Position *p)
@@ -160,7 +177,7 @@ static int quiesce(const Position *p, int alpha, int beta, int qdepth)
 
 static int search(const Position *p, int depth, int alpha, int beta, int ply)
 {
-	if (*g_abort) return 0;
+	if (stopped()) return 0;
 	if (depth <= 0) return quiesce(p, alpha, beta, 0);
 	g_nodes++;
 
@@ -189,6 +206,8 @@ bool ai_pick_move(const Position *p, int level, volatile bool *abort, Move *out)
 	static const int noise_for_level[3] = {80, 12, 0};
 	g_abort = abort;
 	g_nodes = 0;
+	g_deadline = 0;
+	g_out_of_time = false;
 
 	Move moves[MAX_MOVES];
 	int n = gen_legal(p, moves);
@@ -214,5 +233,48 @@ bool ai_pick_move(const Position *p, int level, volatile bool *abort, Move *out)
 		}
 	}
 	*out = moves[best_idx];
+	return true;
+}
+
+bool ai_best_move(const Position *p, int max_ms, volatile bool *abort, Move *out)
+{
+	g_abort = abort;
+	g_nodes = 0;
+	g_out_of_time = false;
+	g_deadline = now_ms() + max_ms;
+
+	Move moves[MAX_MOVES];
+	int n = gen_legal(p, moves);
+	if (n == 0) return false;
+	sort_moves(p, moves, n);
+	*out = moves[0];
+	if (n == 1) return true;
+
+	// Iterative deepening: each finished depth gives a better answer, and the
+	// best move so far is searched first next time. Stop when time runs out.
+	for (int depth = 1; depth <= 64; depth++) {
+		int best = -INF, best_idx = -1;
+		for (int i = 0; i < n; i++) {
+			Position np;
+			make_move(p, moves[i], &np);
+			int score = -search(&np, depth - 1, -INF, -best, 1);
+			if (stopped()) break;
+			if (score > best) {
+				best = score;
+				best_idx = i;
+			}
+		}
+		if (stopped()) {
+			// A partial iteration is still usable if it found something better
+			// than the previous depth's best (which was searched first).
+			if (best_idx > 0) *out = moves[best_idx];
+			break;
+		}
+		*out = moves[best_idx];
+		Move m = moves[best_idx];
+		for (int i = best_idx; i > 0; i--) moves[i] = moves[i - 1];
+		moves[0] = m;
+		if (best >= MATE_SCORE - 64) break; // found a forced mate
+	}
 	return true;
 }
