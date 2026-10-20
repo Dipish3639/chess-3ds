@@ -1,0 +1,9 @@
+build/
+romfs/gfx/
+.tools/
+*.elf
+*.smdh
+*.3dsx
+*.cia
+!release/*.3dsx
+!release/*.cia
